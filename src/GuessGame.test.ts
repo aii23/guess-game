@@ -7,7 +7,43 @@ import {
   PrivateKey,
   PublicKey,
 } from 'o1js';
-import { GuessGame, HiddenValue } from './GuessGame';
+import { GuessGame } from './GuessGame';
+import { HiddenValue } from './Structs';
+import {
+  CheckProgramm,
+  CheckProof,
+  CheckProofPublicInput,
+  EQUALS,
+  GREATER,
+  LESS,
+  check,
+} from './CheckProof';
+import { Pickles } from 'o1js/dist/node/snarky';
+import { dummyBase64Proof } from 'o1js/dist/node/lib/proof-system/zkprogram';
+
+export async function mockProof<I, O, P>(
+  publicOutput: O,
+  ProofType: new ({
+    proof,
+    publicInput,
+    publicOutput,
+    maxProofsVerified,
+  }: {
+    proof: unknown;
+    publicInput: I;
+    publicOutput: any;
+    maxProofsVerified: 0 | 2 | 1;
+  }) => P,
+  publicInput: I
+): Promise<P> {
+  const [, proof] = Pickles.proofOfBase64(await dummyBase64Proof(), 2);
+  return new ProofType({
+    proof: proof,
+    maxProofsVerified: 2,
+    publicInput,
+    publicOutput,
+  });
+}
 
 let proofsEnabled = false;
 
@@ -21,7 +57,10 @@ describe('Test', () => {
     zkApp: GuessGame;
 
   beforeAll(async () => {
-    if (proofsEnabled) await GuessGame.compile();
+    if (proofsEnabled) {
+      await CheckProgramm.compile();
+      await GuessGame.compile();
+    }
   });
 
   beforeEach(async () => {
@@ -77,21 +116,112 @@ describe('Test', () => {
     //   await tx2.sign([senderKey]).send();
     // }).rejects.toThrow('Other numbre was guessed');
 
+    // Guess lower number
+    let guess1 = hiddenNumber.sub(1);
     let tx3 = await Mina.transaction(senderAccount, async () => {
-      await zkApp.guessNumber(hiddenNumber);
+      await zkApp.guessNumber(guess1);
     });
 
     await tx3.prove();
     await tx3.sign([senderKey]).send();
 
-    let score = scoreMerkleMap.get(senderHash);
-    let scoreWitness = scoreMerkleMap.getWitness(senderHash);
+    let checkProof1PublicInput = new CheckProofPublicInput({
+      guessedNumber: guess1,
+    });
+    let checkProof1PublicOutput = check(checkProof1PublicInput, hiddenValue);
+    let checkProof1 = await mockProof(
+      checkProof1PublicOutput,
+      CheckProof,
+      checkProof1PublicInput
+    );
+    // let checkProof1 = await CheckProgramm.check(
+    //   checkProof1PublicInput,
+    //   hiddenValue
+    // );
+
     let tx4 = await Mina.transaction(senderAccount, async () => {
-      await zkApp.revealNumber(hiddenValue, score, scoreWitness);
+      await zkApp.checkValue(checkProof1);
     });
 
     await tx4.prove();
     await tx4.sign([senderKey]).send();
+
+    let curClue = zkApp.clue.get();
+    expect(curClue).toEqual(GREATER);
+
+    // Guess higher number
+    let guess2 = hiddenNumber.add(1);
+    let tx5 = await Mina.transaction(senderAccount, async () => {
+      await zkApp.guessNumber(guess2);
+    });
+
+    await tx5.prove();
+    await tx5.sign([senderKey]).send();
+
+    let checkProof2PublicInput = new CheckProofPublicInput({
+      guessedNumber: guess2,
+    });
+    let checkProof2PublicOutput = check(checkProof2PublicInput, hiddenValue);
+    let checkProof2 = await mockProof(
+      checkProof2PublicOutput,
+      CheckProof,
+      checkProof2PublicInput
+    );
+    // let checkProof2 = await CheckProgramm.check(
+    //   checkProof2PublicInput,
+    //   hiddenValue
+    // );
+
+    let tx6 = await Mina.transaction(senderAccount, async () => {
+      await zkApp.checkValue(checkProof2);
+    });
+
+    await tx6.prove();
+    await tx6.sign([senderKey]).send();
+
+    curClue = zkApp.clue.get();
+    expect(curClue).toEqual(LESS);
+
+    let tx7 = await Mina.transaction(senderAccount, async () => {
+      await zkApp.guessNumber(hiddenNumber);
+    });
+
+    await tx7.prove();
+    await tx7.sign([senderKey]).send();
+
+    let checkProof3PublicInput = new CheckProofPublicInput({
+      guessedNumber: hiddenNumber,
+    });
+    let checkProof3PublicOutput = check(checkProof3PublicInput, hiddenValue);
+    let checkProof3 = await mockProof(
+      checkProof3PublicOutput,
+      CheckProof,
+      checkProof3PublicInput
+    );
+    // let checkProof3 = await CheckProgramm.check(
+    //   checkProof3PublicInput,
+    //   hiddenValue
+    // );
+
+    let tx8 = await Mina.transaction(senderAccount, async () => {
+      await zkApp.checkValue(checkProof3);
+    });
+
+    await tx8.prove();
+    await tx8.sign([senderKey]).send();
+
+    curClue = zkApp.clue.get();
+    expect(curClue).toEqual(EQUALS);
+
+    const score = scoreMerkleMap.get(senderHash);
+    const scoreWitness = scoreMerkleMap.getWitness(senderHash);
+
+    let tx9 = await Mina.transaction(senderAccount, async () => {
+      await zkApp.updateScore(score, scoreWitness);
+    });
+
+    await tx9.prove();
+    await tx9.sign([senderKey]).send();
 
     scoreMerkleMap.set(senderHash, score.add(1));
 
